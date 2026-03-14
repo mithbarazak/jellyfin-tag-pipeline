@@ -60,6 +60,7 @@ Before running the automated pipeline, you must build your local tag dictionarie
 
 1. **Build the Tag Library:** Run `python3 build_tag_library.py`. This will scan your server and create `tag_library.json`, which acts as the strict vocabulary the AI is allowed to pull from. Edit this JSON file manually to remove any tags you do not want the AI to use.
 2. **Build the Tag Mapping:** Run `python3 generate_mapping.py`. This creates `tag_mapping.json`. Open this file and define which tags should be automatically converted into other tags (e.g., mapping "sci-fi" to "science fiction").
+3. **Apply the Tag Mapping:** Run `apply_tag_mapping.py`. This applies the tag conversions described in `tag_mapping.json` to your Jellyfin library.
 
 ## Usage
 
