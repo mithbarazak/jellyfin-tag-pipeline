@@ -1,0 +1,11 @@
+# Environments
+venv/
+.env
+
+# Python specific
+__pycache__/
+*.pyc
+
+# Local Data / Logs
+*.csv
+*.log
