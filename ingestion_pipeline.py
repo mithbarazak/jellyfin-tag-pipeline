@@ -199,9 +199,10 @@ def generate_ai_suggestions(headers):
             Only apply a tag if highly confident. Do not invent new tags. 
 
             Specific Definitions:
-            - "bechdel pass": At least two named women talk to each other about something other than a man.
-            - "bechdel fail": Fails the above criteria.
-            - "ensemble cast": Multiple principal actors with roughly equal screen time.
+            - "ensemble cast": The media has at least four principal actors with roughly equal screen time and importance to the plot.
+            - "bechdel pass": The movie has to have at least two named women in it who talk to each other about something besides a man.
+            - "bechdel fail": The media does not feature two named women talking to each other about something other than a man.
+            CRITICAL RULE FOR BECHDEL TAGS: Do NOT guess. If you do not have absolute, concrete knowledge of the specific scenes in the media to verify the Bechdel test, you MUST omit both Bechdel tags entirely. It is better to apply neither tag than to guess incorrectly.
             
             Allowed Tags:
             {json.dumps(tag_library)}
