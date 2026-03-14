@@ -29,8 +29,6 @@ This project was built to prepare a Jellyfin media library for a custom machine-
    git clone [https://github.com/mithbarazak/jellyfin-tag-pipeline.git](https://github.com/mithbarazak/jellyfin-tag-pipeline.git)
    cd jellyfin-tag-pipeline
 
-```
-
 2. Create and activate a virtual environment:
 ```bash
 python3 -m venv venv
