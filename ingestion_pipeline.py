@@ -17,8 +17,8 @@ API_KEY = os.getenv("JELLYFIN_API_KEY")
 # --- Configuration & Thresholds ---
 MIN_MEDIA_PER_TAG = 5
 MIN_TAGS_PER_MEDIA = 12
-BATCH_SIZE = 50
-MAX_API_REQUESTS = 1
+BATCH_SIZE = 20
+MAX_API_REQUESTS = 10
 
 def get_admin_user(headers):
     response = requests.get(f"{SERVER_URL}/Users", headers=headers)
@@ -28,8 +28,17 @@ def get_admin_user(headers):
                 return user.get("Id")
     return None
 
-def clean_noisy_tags(headers, admin_id):
-    print("\n--- STEP 1: CLEAN AND LOCK NOISY TAGS ---")
+def normalize_and_clean_tags(headers, admin_id):
+    print("\n--- STEP 1 & 2: MAPPING AND CLEANING TAGS ---")
+    
+    # Load mapping file
+    try:
+        with open("tag_mapping.json", "r", encoding="utf-8") as f:
+            mapping = json.load(f)
+    except FileNotFoundError:
+        print("tag_mapping.json not found. Proceeding without mapping.")
+        mapping = {}
+
     params = {"IncludeItemTypes": "Movie,Series", "Recursive": "true", "Fields": "Tags,LockedFields"}
     response = requests.get(f"{SERVER_URL}/Items", headers=headers, params=params)
     if response.status_code != 200:
@@ -37,84 +46,52 @@ def clean_noisy_tags(headers, admin_id):
         return
         
     items = response.json().get("Items", [])
+    
     tag_counts = Counter()
+    item_mapped_tags = {}
     
-    for item in items:
-        standard_tags = [t for t in item.get("Tags", []) if not t.lower().startswith(("franchise:", "universe:", "dependson:"))]
-        tag_counts.update(standard_tags)
-        
-    tags_to_delete = {tag for tag, count in tag_counts.items() if count < MIN_MEDIA_PER_TAG}
-    keys_to_remove = ["UserData", "ImageTags", "BackdropImageTags", "Chapters", "MediaSources", "MediaStreams", "ImageBlurHashes", "Trickplay", "PrimaryImageAspectRatio", "OriginalPrimaryImageAspectRatio", "ServerId", "Etag", "PlayAccess", "ThemeSongIds", "ThemeVideoIds"]
-    
-    updated_count = 0
+    # Pass 1: Map tags in memory and count frequencies
     for item in items:
         item_id = item.get("Id")
         current_tags = item.get("Tags", [])
-        current_locked = item.get("LockedFields", [])
-        
-        new_tags = [t for t in current_tags if t.lower().startswith(("franchise:", "universe:", "dependson:")) or t not in tags_to_delete]
-        needs_purge = len(new_tags) != len(current_tags)
-        is_locked = "Tags" in current_locked
-        
-        if needs_purge or not is_locked:
-            full_item_response = requests.get(f"{SERVER_URL}/Users/{admin_id}/Items/{item_id}", headers=headers)
-            if full_item_response.status_code != 200:
-                full_item_response = requests.get(f"{SERVER_URL}/Items/{item_id}", headers=headers, params={"userId": admin_id})
-                
-            if full_item_response.status_code == 200:
-                full_item = full_item_response.json()
-                for key in keys_to_remove: full_item.pop(key, None)
-                
-                if needs_purge:
-                    full_item["Tags"] = new_tags
-                    full_item["LockedFields"] = [f for f in full_item.get("LockedFields", []) if f != "Tags"]
-                    requests.post(f"{SERVER_URL}/Items/{item_id}", headers=headers, json=full_item)
-                
-                locked_fields = full_item.get("LockedFields", [])
-                if "Tags" not in locked_fields:
-                    locked_fields.append("Tags")
-                    full_item["LockedFields"] = locked_fields
-                    requests.post(f"{SERVER_URL}/Items/{item_id}", headers=headers, json=full_item)
-                updated_count += 1
-                
-    print(f"Cleaned and locked {updated_count} items.")
-
-def apply_tag_mapping(headers, admin_id):
-    print("\n--- STEP 2: APPLY TAG MAPPING ---")
-    try:
-        with open("tag_mapping.json", "r", encoding="utf-8") as f:
-            mapping = json.load(f)
-    except FileNotFoundError:
-        print("tag_mapping.json not found. Skipping mapping.")
-        return
-
-    params = {"IncludeItemTypes": "Movie,Series", "Recursive": "true", "Fields": "Tags,LockedFields"}
-    response = requests.get(f"{SERVER_URL}/Items", headers=headers, params=params)
-    if response.status_code != 200: return
-        
-    items = response.json().get("Items", [])
-    keys_to_remove = ["UserData", "ImageTags", "BackdropImageTags", "Chapters", "MediaSources", "MediaStreams", "ImageBlurHashes", "Trickplay", "PrimaryImageAspectRatio", "OriginalPrimaryImageAspectRatio", "ServerId", "Etag", "PlayAccess", "ThemeSongIds", "ThemeVideoIds"]
-    updated_count = 0
-
-    for item in items:
-        current_tags = item.get("Tags", [])
-        if not current_tags: continue
-            
-        new_tags = set()
-        needs_update = False
+        mapped_tags = set()
         
         for tag in current_tags:
             if tag in mapping:
-                needs_update = True
                 replacement = mapping[tag]
-                if isinstance(replacement, list): new_tags.update(replacement)
-                else: new_tags.add(replacement)
+                if isinstance(replacement, list): 
+                    mapped_tags.update(replacement)
+                else: 
+                    mapped_tags.add(replacement)
             else:
-                new_tags.add(tag)
+                mapped_tags.add(tag)
                 
-        if needs_update:
-            item_id = item.get("Id")
-            final_tags = sorted(list(new_tags))
+        mapped_tags_list = sorted(list(mapped_tags))
+        item_mapped_tags[item_id] = mapped_tags_list
+        
+        # Count only standard tags
+        standard_tags = [t for t in mapped_tags_list if not t.lower().startswith(("franchise:", "universe:", "dependson:"))]
+        tag_counts.update(standard_tags)
+
+    # Identify tags that still don't meet the threshold after mapping
+    tags_to_delete = {tag for tag, count in tag_counts.items() if count < MIN_MEDIA_PER_TAG}
+    
+    keys_to_remove = ["UserData", "ImageTags", "BackdropImageTags", "Chapters", "MediaSources", "MediaStreams", "ImageBlurHashes", "Trickplay", "PrimaryImageAspectRatio", "OriginalPrimaryImageAspectRatio", "ServerId", "Etag", "PlayAccess", "ThemeSongIds", "ThemeVideoIds"]
+    updated_count = 0
+
+    # Pass 2: Filter noisy tags and update API if needed
+    for item in items:
+        item_id = item.get("Id")
+        original_tags = item.get("Tags", [])
+        current_locked = item.get("LockedFields", [])
+        
+        # Take the mapped tags and filter out the noisy ones (keeping structural tags)
+        final_tags = [t for t in item_mapped_tags[item_id] if t.lower().startswith(("franchise:", "universe:", "dependson:")) or t not in tags_to_delete]
+        
+        needs_update = set(final_tags) != set(original_tags)
+        is_locked = "Tags" in current_locked
+        
+        if needs_update or not is_locked:
             full_item_response = requests.get(f"{SERVER_URL}/Users/{admin_id}/Items/{item_id}", headers=headers)
             if full_item_response.status_code != 200:
                 full_item_response = requests.get(f"{SERVER_URL}/Items/{item_id}", headers=headers, params={"userId": admin_id})
@@ -123,18 +100,26 @@ def apply_tag_mapping(headers, admin_id):
                 full_item = full_item_response.json()
                 for key in keys_to_remove: full_item.pop(key, None)
                 
-                full_item["Tags"] = final_tags
-                full_item["LockedFields"] = [f for f in full_item.get("LockedFields", []) if f != "Tags"]
-                requests.post(f"{SERVER_URL}/Items/{item_id}", headers=headers, json=full_item)
+                if needs_update:
+                    # 1. Unlock
+                    if "Tags" in full_item.get("LockedFields", []):
+                        full_item["LockedFields"] = [f for f in full_item.get("LockedFields", []) if f != "Tags"]
+                        requests.post(f"{SERVER_URL}/Items/{item_id}", headers=headers, json=full_item)
+                        
+                    # 2. Update
+                    full_item["Tags"] = final_tags
+                    requests.post(f"{SERVER_URL}/Items/{item_id}", headers=headers, json=full_item)
                 
-                locked_fields = full_item.get("LockedFields", [])
-                if "Tags" not in locked_fields:
+                # 3. Relock
+                if "Tags" not in full_item.get("LockedFields", []):
+                    locked_fields = full_item.get("LockedFields", [])
                     locked_fields.append("Tags")
                     full_item["LockedFields"] = locked_fields
                     requests.post(f"{SERVER_URL}/Items/{item_id}", headers=headers, json=full_item)
+                
                 updated_count += 1
                 
-    print(f"Normalized tags on {updated_count} items.")
+    print(f"Processed mappings and cleaned tags on {updated_count} items.")
 
 def generate_ai_suggestions(headers):
     print("\n--- STEP 3: GENERATE AI SUGGESTIONS ---")
@@ -293,8 +278,7 @@ def main():
         print("Error: Could not authenticate Administrator user.")
         return
 
-    clean_noisy_tags(headers, admin_id)
-    apply_tag_mapping(headers, admin_id)
+    normalize_and_clean_tags(headers, admin_id)
     generate_ai_suggestions(headers)
     print("\nPipeline Complete! Review proposed_tags.csv and run commit_tags.py when ready.")
 
